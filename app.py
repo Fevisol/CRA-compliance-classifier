@@ -1,0 +1,578 @@
+import os
+import json
+import re
+import tempfile
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import PyPDF2
+import pandas as pd
+from flask import Flask, render_template, request, jsonify
+from flask_cors import CORS
+from dotenv import load_dotenv
+from google import genai
+import hashlib
+
+# Load environment variables
+load_dotenv()
+
+# Initialize Flask app
+app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key')
+CORS(app)
+
+# Define References folder path
+REFERENCES_FOLDER = Path(__file__).parent.parent / 'References'
+CHECKLIST_FILE = REFERENCES_FOLDER / 'checklist_simple.csv'  # Default checklist file
+
+# Configuration for reference loading
+MAX_REFERENCE_CHARS = 50000  # Limit reference text to avoid quota errors
+AUTO_LOAD_REFERENCES = True  # Set to False to disable auto-loading
+AUTO_LOAD_CHECKLIST = True  # Set to False to disable auto-loading checklist
+
+# Configure Gemini with new SDK
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+if not GEMINI_API_KEY:
+    print("ERROR: GEMINI_API_KEY not found in environment variables")
+    print("Please check your .env file")
+else:
+    print(f"API Key loaded successfully")
+    # Initialize the new Google GenAI client
+    genai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Available Gemini models (working stable models)
+GEMINI_MODELS = {
+    'gemini-2.5-flash': 'Fast, efficient for standard analysis (Recommended - STABLE)',
+    'gemini-2.5-flash-lite': 'Cost-efficient for high-volume tasks',
+    'gemini-2.5-pro': 'Best reasoning capabilities for complex documents'
+}
+
+class CRAAnalyzer:
+    """AI-powered CRA compliance analyzer using Gemini 2.5 Flash"""
+    
+    def __init__(self, model_name: str = "gemini-2.5-flash", custom_checklist: Optional[List[Dict]] = None, reference_text: Optional[str] = None):
+        """Initialize Gemini with new SDK"""
+        if not GEMINI_API_KEY:
+            raise ValueError("Gemini API key not configured")
+        
+        self.client = genai_client
+        self.model_name = model_name
+        self.custom_checklist = custom_checklist
+        
+        # Auto-load references from References folder if not provided
+        if reference_text is None and AUTO_LOAD_REFERENCES:
+            reference_text = self.load_references_from_folder()
+        
+        # Auto-load checklist from References folder if not provided
+        if custom_checklist is None and AUTO_LOAD_CHECKLIST:
+            custom_checklist = self.load_checklist_from_folder()
+        
+        self.reference_text = reference_text
+        print(f"Initialized CRAAnalyzer with model: {model_name}")
+        if custom_checklist:
+            print(f"Loaded {len(custom_checklist)} custom checklist items")
+        if reference_text:
+            print(f"Loaded reference documentation ({len(reference_text)} characters)")
+    
+    def preprocess_document(self, file_path: str) -> str:
+        """Extract and clean text from PDF or TXT files"""
+        file_ext = Path(file_path).suffix.lower()
+        
+        if file_ext == '.pdf':
+            return self._extract_from_pdf(file_path)
+        elif file_ext == '.txt':
+            return self._extract_from_txt(file_path)
+        else:
+            raise ValueError(f"Unsupported file type: {file_ext}")
+    
+    def _extract_from_pdf(self, pdf_path: str) -> str:
+        """Extract text from PDF"""
+        text = ""
+        try:
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page_num, page in enumerate(pdf_reader.pages, 1):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += f"\n--- Page {page_num} ---\n{page_text}"
+        except Exception as e:
+            raise Exception(f"PDF extraction failed: {str(e)}")
+        
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+    
+    def _extract_from_txt(self, txt_path: str) -> str:
+        """Extract text from plain text file"""
+        with open(txt_path, 'r', encoding='utf-8') as file:
+            return file.read()
+    
+    def load_checklist_from_folder(self) -> Optional[List[Dict]]:
+        """Load checklist from default checklist file in References folder"""
+        if not CHECKLIST_FILE.exists():
+            print(f"Checklist file not found at: {CHECKLIST_FILE}")
+            return None
+        
+        try:
+            print(f"Loading checklist from: {CHECKLIST_FILE.name}")
+            checklist = self.parse_checklist(str(CHECKLIST_FILE))
+            print(f"Loaded {len(checklist)} checklist items from {CHECKLIST_FILE.name}")
+            return checklist
+        except Exception as e:
+            print(f"Error loading checklist: {str(e)}")
+            return None
+    
+    def load_references_from_folder(self) -> str:
+        """Load all reference documents from References folder"""
+        if not REFERENCES_FOLDER.exists():
+            print(f"References folder not found at: {REFERENCES_FOLDER}")
+            return ""
+        
+        combined_text = ""
+        reference_files = []
+        
+        # Collect all PDF and TXT files (skip checklist file)
+        for file_path in REFERENCES_FOLDER.glob('*'):
+            if file_path.is_file() and file_path.suffix.lower() in ['.pdf', '.txt', '.xlsx', '.xls']:
+                # Skip temporary Excel files and the checklist file
+                if file_path.name.startswith('~$') or file_path == CHECKLIST_FILE:
+                    continue
+                reference_files.append(file_path)
+        
+        print(f"Found {len(reference_files)} reference files in References folder")
+        
+        # Process each file
+        for file_path in reference_files:
+            try:
+                print(f"Loading reference: {file_path.name}")
+                
+                if file_path.suffix.lower() == '.pdf':
+                    text = self._extract_from_pdf(str(file_path))
+                elif file_path.suffix.lower() == '.txt':
+                    text = self._extract_from_txt(str(file_path))
+                elif file_path.suffix.lower() in ['.xlsx', '.xls']:
+                    # For Excel files, try to parse as checklist or extract text
+                    try:
+                        checklist = self.parse_checklist(str(file_path))
+                        if checklist:
+                            text = f"\n--- {file_path.name} (Checklist) ---\n"
+                            for item in checklist:
+                                text += f"\nRequirement: {item['requirement']}\n"
+                                text += f"Explanation: {item['explanation']}\n"
+                                if item['legal_reference']:
+                                    text += f"Legal Reference: {item['legal_reference']}\n"
+                    except:
+                        text = f"\n--- {file_path.name} ---\n[Excel file - could not extract text]"
+                else:
+                    continue
+                
+                combined_text += f"\n\n{'='*60}\n"
+                combined_text += f"REFERENCE: {file_path.name}\n"
+                combined_text += f"{'='*60}\n"
+                combined_text += text
+                
+                # Check if we've exceeded the limit
+                if len(combined_text) > MAX_REFERENCE_CHARS:
+                    print(f"Reference text limit reached ({MAX_REFERENCE_CHARS} chars). Truncating...")
+                    combined_text = combined_text[:MAX_REFERENCE_CHARS]
+                    combined_text += "\n\n[Reference text truncated due to size limit]"
+                    break
+                
+            except Exception as e:
+                print(f"Error loading reference {file_path.name}: {str(e)}")
+                continue
+        
+        print(f"Total reference text loaded: {len(combined_text)} characters")
+        return combined_text
+    
+    def parse_checklist(self, file_path: str) -> List[Dict]:
+        """Parse checklist from CSV or Excel file"""
+        file_ext = Path(file_path).suffix.lower()
+        
+        try:
+            if file_ext in ['.csv']:
+                df = pd.read_csv(file_path)
+            elif file_ext in ['.xlsx', '.xls']:
+                df = pd.read_excel(file_path)
+            else:
+                raise ValueError(f"Unsupported checklist format: {file_ext}")
+            
+            print(f"Excel columns found: {list(df.columns)}")
+            print(f"Shape: {df.shape}")
+            
+            checklist = []
+            current_section = ""
+            
+            for idx, row in df.iterrows():
+                # Get values and handle NaN
+                id_val = row.get('ID', '')
+                question_val = row.get('Question', '')
+                
+                # Convert NaN to empty string
+                if pd.isna(id_val):
+                    id_val = ''
+                if pd.isna(question_val):
+                    question_val = ''
+                
+                id_val = str(id_val).strip()
+                question_val = str(question_val).strip()
+                
+                # Debug: Print first few rows
+                if isinstance(idx, int) and idx < 5:
+                    print(f"Row {idx}: ID='{id_val}', Question='{question_val}'")
+                
+                # Check for section header
+                if 'Section' in id_val or 'Section' in question_val:
+                    current_section = str(question_val if question_val else id_val).strip()
+                    print(f"Found section: {current_section}")
+                    continue
+                
+                # Skip empty rows or rows without questions
+                if not question_val or question_val.lower() in ['nan', 'none', '', ' '] or not id_val:
+                    continue
+                
+                item = {
+                    'id': id_val,
+                    'section': current_section,
+                    'question': question_val,
+                    'requirement': str(row.get('Requirment', row.get('Requirement', row.get('requirement', '')))).strip(),
+                    'legal_reference': str(row.get('Legal Reference', row.get('legal_reference', ''))).strip(),
+                    'other_reference': str(row.get('Other Reference', row.get('other_reference', ''))).strip(),
+                    'note': str(row.get('Note', row.get('note', ''))).strip(),
+                    'check': str(row.get('Check', row.get('check', ''))).strip()
+                }
+                
+                # Only add if there's a question
+                if item['question']:
+                    checklist.append(item)
+                    print(f"Added checklist item: {item['id']} - {item['question'][:50]}...")
+            
+            print(f"Parsed {len(checklist)} checklist items from {file_path}")
+            return checklist
+            
+        except Exception as e:
+            print(f"Checklist parsing error: {str(e)}")
+            raise Exception(f"Checklist parsing failed: {str(e)}")
+    
+    def create_classification_prompt(self, document_text: str) -> str:
+        """Create structured prompt for CRA classification"""
+        
+        # Build checklist section if provided
+        checklist_section = ""
+        if self.custom_checklist:
+            checklist_section = "\n\nCUSTOM CHECKLIST CRITERIA:\n"
+            current_section = ""
+            
+            for item in self.custom_checklist:
+                # Add section header if changed
+                if item['section'] and item['section'] != current_section:
+                    current_section = item['section']
+                    checklist_section += f"\n{'='*60}\n{current_section}\n{'='*60}\n"
+                
+                checklist_section += f"\n{item['id']}. {item['question']}\n"
+                if item['requirement']:
+                    checklist_section += f"   Requirement: {item['requirement']}\n"
+                if item['legal_reference']:
+                    checklist_section += f"   Legal Reference: {item['legal_reference']}\n"
+                if item['other_reference']:
+                    checklist_section += f"   Other Reference: {item['other_reference']}\n"
+                if item['note']:
+                    checklist_section += f"   Note: {item['note']}\n"
+                if item['check']:
+                    checklist_section += f"   Gate: {item['check']}\n"
+        
+        # Build reference section if provided
+        reference_section = ""
+        if self.reference_text:
+            reference_section = f"\n\nREFERENCE DOCUMENTATION:\n{self.reference_text}\n"
+        
+        return f"""You are an expert in EU Cyber Resilience Act (CRA - Regulation EU 2024/2847). 
+Analyze this product documentation and determine if it falls under CRA scope.
+
+PRODUCT DOCUMENTATION:
+{document_text}
+{reference_section}
+{checklist_section}
+Based ONLY on the information above, answer the checklist questions and determine CRA scope.
+
+CRITICAL SCOPE DETERMINATION RULES:
+- A product is IN SCOPE if it passes ALL gate requirements from Sections 1-4
+- Section 1 (Product with Digital Elements): Must be YES
+- Section 2 (Connectivity): Must be YES  
+- Section 3 (EU Market Placement): 3.1 must be YES and 3.2 must be NO
+- Section 4 (Exclusions): All exclusion questions (4.1-4.7) must be NO
+- If any exclusion is YES, product is OUT OF SCOPE
+- Additional sections (5-8) provide further context for specific scenarios
+
+Now provide your analysis in this EXACT JSON format (no other text before or after):
+
+{{
+  "product_name": "extract product name from documentation",
+  "in_scope": "YES or NO",
+  "confidence": "high/medium/low",
+  "reasoning": "brief explanation of your decision based on gate logic",
+  "risk_level": "default/important/critical",
+  "key_features": ["feature1", "feature2"],
+  "checklist_results": {{
+    "section1_product_digital_element": "YES or NO",
+    "section2_connectivity": "YES or NO",
+    "section3_eu_market_3_1": "YES or NO",
+    "section3_eu_market_3_2": "YES or NO",
+    "section4_exclusions": {{
+      "medical_device_4_1": "YES or NO",
+      "ivdr_4_2": "YES or NO",
+      "vehicle_approval_4_3": "YES or NO",
+      "aviation_4_4": "YES or NO",
+      "maritime_4_5": "YES or NO",
+      "national_security_4_6": "YES or NO",
+      "higher_protection_4_7": "YES or NO"
+    }},
+    "section5_spare_part": "YES or NO",
+    "section6_remote_processing": "YES or NO",
+    "section7_oss": "YES or NO",
+    "section8_downstream": "YES or NO"
+  }},
+  "checklist_compliance": {{
+    "total_items": 0,
+    "compliant_items": 0,
+    "non_compliant_items": 0,
+    "details": []
+  }}
+}}
+
+Remember: Output ONLY the JSON, no explanation before or after."""
+    
+    def classify_document(self, document_text: str) -> Dict:
+        """Main classification function using new SDK"""
+        
+        if len(document_text.strip()) < 50:
+            return {
+                'error': 'Document text too short',
+                'classification': {'in_scope': None, 'confidence_score': 0}
+            }
+        
+        prompt = self.create_classification_prompt(document_text)
+        
+        try:
+            print(f"Sending request to Gemini API using model: {self.model_name}...")
+            
+            # Use the new SDK syntax with working model
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
+            
+            print(f"Received response from Gemini")
+            response_text = response.text
+            print(f"Response preview: {response_text[:200]}...")
+            
+            # Try to extract JSON from response
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group()
+                result = json.loads(json_str)
+                print(f"Successfully parsed JSON response")
+                
+                # Convert to our expected format
+                formatted_result = {
+                    'product_name': result.get('product_name', 'Unknown'),
+                    'classification': {
+                        'in_scope': result.get('in_scope', 'NO').upper() == 'YES',
+                        'confidence_score': 0.9 if result.get('confidence') == 'high' else 0.6 if result.get('confidence') == 'medium' else 0.3,
+                        'reasoning': result.get('reasoning', 'Analysis complete')
+                    },
+                    'checklist_results': result.get('checklist_results', {}),
+                    'cra_criteria_analysis': {
+                        'digital_element': {
+                            'met': result.get('checklist_results', {}).get('section1_product_digital_element', 'NO').upper() == 'YES',
+                            'explanation': 'Based on Section 1 of checklist'
+                        },
+                        'connectivity': {
+                            'met': result.get('checklist_results', {}).get('section2_connectivity', 'NO').upper() == 'YES',
+                            'explanation': 'Based on Section 2 of checklist'
+                        },
+                        'commercial_activity': {
+                            'met': result.get('checklist_results', {}).get('section3_eu_market_3_1', 'NO').upper() == 'YES',
+                            'explanation': 'Based on Section 3.1 of checklist'
+                        },
+                        'exclusions_applicable': {
+                            'met': any(result.get('checklist_results', {}).get('section4_exclusions', {}).values()) if result.get('checklist_results', {}).get('section4_exclusions') else False,
+                            'exclusion_type': 'various',
+                            'explanation': 'Based on Section 4 exclusions'
+                        }
+                    },
+                    'risk_category': {
+                        'level': result.get('risk_level', 'default'),
+                        'reasoning': 'Based on product functionality'
+                    },
+                    'compliance_assessment': {
+                        'requirements_applicable': [
+                            'CE marking required' if result.get('in_scope') == 'YES' else 'No requirements',
+                            'Technical documentation needed' if result.get('in_scope') == 'YES' else 'Not applicable',
+                            'Vulnerability reporting (by Sept 11, 2026)' if result.get('in_scope') == 'YES' else 'Not applicable',
+                            'Full compliance (by Dec 11, 2027)' if result.get('in_scope') == 'YES' else 'Not applicable'
+                        ],
+                        'deadlines': {
+                            'reporting_obligation': 'September 11, 2026',
+                            'full_compliance': 'December 11, 2027'
+                        },
+                        'recommendations': [
+                            'Prepare technical documentation' if result.get('in_scope') == 'YES' else 'No immediate action needed',
+                            'Establish vulnerability reporting process' if result.get('in_scope') == 'YES' else 'Monitor CRA updates',
+                            'Plan for CE mark certification' if result.get('in_scope') == 'YES' else 'Document exclusion reasoning'
+                        ]
+                    },
+                    'summary': {
+                        'verdict': f"Product is {'IN' if result.get('in_scope') == 'YES' else 'OUT OF'} CRA scope",
+                        'key_risks': ['Compliance requirements apply - needs CE mark'] if result.get('in_scope') == 'YES' else ['No immediate CRA requirements'],
+                        'next_steps': [
+                            'Review CRA compliance checklist' if result.get('in_scope') == 'YES' else 'Monitor CRA updates for potential future impact',
+                            'Conduct internal cybersecurity assessment' if result.get('in_scope') == 'YES' else 'Document why product is excluded'
+                        ]
+                    },
+                    'analysis_metadata': {
+                        'model_used': self.model_name,
+                        'analysis_timestamp': datetime.now().isoformat()
+                    }
+                }
+                
+                return formatted_result
+            else:
+                print("No JSON found in response")
+                return {
+                    'error': 'Could not parse JSON from Gemini response',
+                    'raw_response': response_text[:500],
+                    'classification': {'in_scope': None, 'confidence_score': 0}
+                }
+                
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error: {e}")
+            return {
+                'error': f'JSON parsing failed: {str(e)}',
+                'raw_response': response_text if 'response_text' in locals() else '',
+                'classification': {'in_scope': None, 'confidence_score': 0}
+            }
+        except Exception as e:
+            print(f"Gemini API error: {str(e)}")
+            return {
+                'error': f'Gemini API error: {str(e)}',
+                'classification': {'in_scope': None, 'confidence_score': 0}
+            }
+
+# Flask Routes
+@app.route('/')
+def index():
+    """Render main application interface"""
+    return render_template('index.html', models=GEMINI_MODELS)
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze_document():
+    """Endpoint for document analysis"""
+    try:
+        # Get model selection
+        model_name = request.form.get('model', 'gemini-2.5-flash')
+        if model_name not in GEMINI_MODELS:
+            model_name = 'gemini-2.5-flash'
+        
+        if not GEMINI_API_KEY:
+            return jsonify({
+                'success': False,
+                'error': 'Gemini API key not configured. Please check .env file'
+            }), 500
+        
+        # Initialize analyzer
+        custom_checklist = None
+        
+        # Handle custom checklist upload
+        if 'checklist' in request.files:
+            checklist_file = request.files['checklist']
+            if checklist_file.filename != '':
+                temp_checklist_path = os.path.join(tempfile.gettempdir(), f"{hashlib.md5(checklist_file.filename.encode()).hexdigest()}_{checklist_file.filename}")
+                checklist_file.save(temp_checklist_path)
+                
+                try:
+                    analyzer_temp = CRAAnalyzer(model_name=model_name)
+                    custom_checklist = analyzer_temp.parse_checklist(temp_checklist_path)
+                finally:
+                    if os.path.exists(temp_checklist_path):
+                        os.remove(temp_checklist_path)
+        
+        # Reference documentation is auto-loaded from References folder
+        analyzer = CRAAnalyzer(model_name=model_name, custom_checklist=custom_checklist)
+        document_text = None
+        
+        # Handle file upload
+        if 'document' in request.files:
+            file = request.files['document']
+            if file.filename == '':
+                return jsonify({'error': 'No file selected'}), 400
+            
+            temp_path = os.path.join(tempfile.gettempdir(), f"{hashlib.md5(file.filename.encode()).hexdigest()}_{file.filename}")
+            file.save(temp_path)
+            
+            try:
+                document_text = analyzer.preprocess_document(temp_path)
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        
+        # Handle direct text input
+        elif 'text' in request.form and request.form['text'].strip():
+            document_text = request.form['text'].strip()
+        
+        else:
+            return jsonify({'error': 'Please provide either a document file or text input'}), 400
+        
+        print(f"Processing document of length: {len(document_text)} characters")
+        if custom_checklist:
+            print(f"Using custom checklist with {len(custom_checklist)} items")
+        if analyzer.reference_text:
+            print(f"Using auto-loaded reference documentation")
+        
+        # Run classification
+        result = analyzer.classify_document(document_text)
+        
+        if 'error' in result:
+            return jsonify({
+                'success': False,
+                'error': result['error'],
+                'raw_response': result.get('raw_response', '')
+            }), 500
+        
+        return jsonify({
+            'success': True,
+            'result': result,
+            'model_used': model_name,
+            'checklist_used': len(custom_checklist) if custom_checklist else 0,
+            'reference_used': bool(analyzer.reference_text)
+        })
+    
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """API health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'gemini_configured': bool(GEMINI_API_KEY),
+        'model_available': 'gemini-2.5-flash',
+        'timestamp': datetime.now().isoformat()
+    })
+
+if __name__ == '__main__':
+    print("=" * 50)
+    print("🛡️ CRA Compliance Analyzer Starting...")
+    print("=" * 50)
+    print(f"Gemini API Key configured: {'✅ YES' if GEMINI_API_KEY else '❌ NO'}")
+    if GEMINI_API_KEY:
+        print(f"Using model: gemini-2.5-flash (STABLE)")
+        print(f"Google GenAI SDK: Active")
+    print("=" * 50)
+    print("🌐 Web interface: http://127.0.0.1:5000")
+    print("=" * 50)
+    app.run(debug=True, host='0.0.0.0', port=5000)

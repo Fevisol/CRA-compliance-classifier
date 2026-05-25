@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRA Compliance Analyzer | AI-Powered Document Classification</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+        
+        .main-card {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .input-section {
+            padding: 30px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .tab-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .tab-btn {
+            padding: 10px 20px;
+            border: none;
+            background: #f0f0f0;
+            cursor: pointer;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+        
+        .tab-btn.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .file-upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .file-upload-area:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+        
+        textarea {
+            width: 100%;
+            min-height: 200px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            resize: vertical;
+        }
+        
+        .model-selector {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        
+        select {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            margin-left: 10px;
+        }
+        
+        .analyze-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 1.1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s;
+            width: 100%;
+            margin-top: 20px;
+        }
+        
+        .analyze-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .analyze-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .results-section {
+            padding: 30px;
+            display: none;
+        }
+        
+        .results-section.show {
+            display: block;
+        }
+        
+        .result-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .verdict-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+        
+        .verdict-in-scope {
+            background: #dcfce7;
+            color: #166534;
+        }
+        
+        .verdict-out-scope {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
+        .confidence-bar {
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            background: #667eea;
+            transition: width 0.5s;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 30px;
+        }
+        
+        .loading.show {
+            display: block;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .criteria-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .criteria-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .status-icon {
+            font-size: 1.2rem;
+            margin-right: 8px;
+        }
+        
+        .status-pass {
+            color: #10b981;
+        }
+        
+        .status-fail {
+            color: #ef4444;
+        }
+        
+        pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛡️ CRA Compliance Analyzer</h1>
+            <p>AI-Powered Document Classification for EU Cyber Resilience Act</p>
+        </div>
+        
+        <div class="main-card">
+            <div class="input-section">
+                <div class="tab-buttons">
+                    <button class="tab-btn active" onclick="switchTab('file')">📄 Upload Document</button>
+                    <button class="tab-btn" onclick="switchTab('text')">✏️ Paste Text</button>
+                </div>
+                
+                <div id="file-tab" class="tab-content active">
+                    <div class="file-upload-area" onclick="document.getElementById('file-input').click()">
+                        <p>📁 Click to upload or drag & drop</p>
+                        <p style="font-size: 12px; color: #666; margin-top: 10px;">Supports PDF, TXT (Max 10MB)</p>
+                        <input type="file" id="file-input" accept=".pdf,.txt" style="display: none;">
+                    </div>
+                    <div id="file-name" style="margin-top: 10px; font-size: 14px; color: #666;"></div>
+                </div>
+                
+                <div id="text-tab" class="tab-content">
+                    <textarea id="text-input" placeholder="Paste your product documentation, specifications, or compliance notes here..."></textarea>
+                </div>
+                
+                <div class="model-selector">
+                    <label>🤖 Select AI Model:</label>
+                    <select id="model-select">
+                        {% for model_id, description in models.items() %}
+                        <option value="{{ model_id }}" {% if model_id == 'gemini-1.5-flash' %}selected{% endif %}>
+                            {{ model_id }} - {{ description }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <p style="font-size: 12px; color: #666; margin-top: 5px;">Free tier: 1,500 requests/day (Gemini 1.5 Flash)</p>
+                </div>
+                
+                <div class="model-selector">
+                    <label>📋 Custom Checklist (Optional):</label>
+                    <input type="file" id="checklist-input" accept=".csv,.xlsx,.xls" style="margin-left: 10px;">
+                    <p style="font-size: 12px; color: #666; margin-top: 5px;">Upload your CRA checklist (CSV/Excel with columns: Requirement, Explanation, Legal Reference)</p>
+                </div>
+                
+                <div class="model-selector">
+                    <label>📚 Reference Documentation:</label>
+                    <p style="font-size: 12px; color: #666; margin-top: 5px;">Auto-loaded from References folder (Regulation PDFs, checklists, etc.)</p>
+                </div>
+                
+                <button class="analyze-btn" onclick="analyzeDocument()">🚀 Analyze CRA Compliance</button>
+            </div>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p style="margin-top: 15px;">Analyzing document with Gemini AI...</p>
+                <p style="font-size: 12px; color: #666;">Checking against CRA Articles 2, 3, 7, 8 [citation:7]</p>
+            </div>
+            
+            <div class="results-section" id="results">
+                <div id="results-content"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let selectedFile = null;
+        let selectedChecklist = null;
+        
+        document.getElementById('file-input').addEventListener('change', function(e) {
+            selectedFile = e.target.files[0];
+            if (selectedFile) {
+                document.getElementById('file-name').innerHTML = `✅ Selected: ${selectedFile.name}`;
+            }
+        });
+        
+        document.getElementById('checklist-input').addEventListener('change', function(e) {
+            selectedChecklist = e.target.files[0];
+            if (selectedChecklist) {
+                document.getElementById('checklist-input').style.color = '#10b981';
+            }
+        });
+        
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            if (tab === 'file') {
+                document.querySelector('.tab-btn:first-child').classList.add('active');
+                document.getElementById('file-tab').classList.add('active');
+            } else {
+                document.querySelector('.tab-btn:last-child').classList.add('active');
+                document.getElementById('text-tab').classList.add('active');
+            }
+        }
+        
+        async function analyzeDocument() {
+            const formData = new FormData();
+            const model = document.getElementById('model-select').value;
+            formData.append('model', model);
+            
+            // Check input method
+            const file = selectedFile;
+            const text = document.getElementById('text-input').value;
+            
+            if (file) {
+                formData.append('document', file);
+            } else if (text.trim()) {
+                formData.append('text', text);
+            } else {
+                alert('Please upload a document or paste text to analyze');
+                return;
+            }
+            
+            // Add checklist if provided
+            if (selectedChecklist) {
+                formData.append('checklist', selectedChecklist);
+            }
+            
+            // Show loading
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('results').classList.remove('show');
+            
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayResults(data.result);
+                } else {
+                    displayError(data.error);
+                }
+            } catch (error) {
+                displayError('Network error: ' + error.message);
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+                document.getElementById('results').classList.add('show');
+            }
+        }
+        
+        function displayResults(result) {
+            const container = document.getElementById('results-content');
+            const inScope = result.classification?.in_scope;
+            const confidence = result.classification?.confidence_score || 0;
+            
+            let verdictClass = inScope ? 'verdict-in-scope' : 'verdict-out-scope';
+            let verdictText = inScope ? '✅ IN SCOPE' : '❌ OUT OF SCOPE';
+            
+            let html = `
+                <div class="result-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                        <div>
+                            <span class="verdict-badge ${verdictClass}">${verdictText}</span>
+                            <p style="margin-top: 10px;"><strong>Product:</strong> ${result.product_name || 'Not specified'}</p>
+                        </div>
+                        <div>
+                            <p><strong>Confidence:</strong> ${(confidence * 100).toFixed(1)}%</p>
+                            <div class="confidence-bar">
+                                <div class="confidence-fill" style="width: ${confidence * 100}%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <p style="margin-top: 15px;"><strong>Reasoning:</strong> ${result.classification?.reasoning || 'Analysis complete'}</p>
+                </div>
+            `;
+            
+            // Show criteria analysis if available
+            if (result.cra_criteria_analysis) {
+                html += `<div class="result-card">
+                    <h3>📋 CRA Criteria Analysis</h3>
+                    <div class="criteria-grid">`;
+                
+                const criteria = result.cra_criteria_analysis;
+                for (const [key, value] of Object.entries(criteria)) {
+                    if (value && typeof value === 'object') {
+                        const status = value.met ? '✅' : '❌';
+                        html += `
+                            <div class="criteria-item">
+                                <strong>${status} ${key.replace(/_/g, ' ').toUpperCase()}</strong>
+                                <p style="font-size: 14px; margin-top: 8px;">${value.explanation || value.evidence || 'No data'}</p>
+                            </div>
+                        `;
+                    }
+                }
+                html += `</div></div>`;
+            }
+            
+            // Show risk category
+            if (result.risk_category) {
+                html += `<div class="result-card">
+                    <h3>⚠️ Risk Classification</h3>
+                    <p><strong>Level:</strong> ${result.risk_category.level?.toUpperCase() || 'Not classified'}</p>
+                    <p><strong>Reasoning:</strong> ${result.risk_category.reasoning || 'Standard risk level'}</p>
+                </div>`;
+            }
+            
+            // Show recommendations
+            if (result.compliance_assessment) {
+                html += `<div class="result-card">
+                    <h3>🎯 Compliance Requirements</h3>
+                    <ul>
+                        ${result.compliance_assessment.requirements_applicable?.map(req => `<li>${req}</li>`).join('') || '<li>No specific requirements identified</li>'}
+                    </ul>
+                    ${result.compliance_assessment.recommendations ? `
+                    <h4 style="margin-top: 15px;">📌 Recommendations</h4>
+                    <ul>
+                        ${result.compliance_assessment.recommendations.map(rec => `<li>${rec}</li>`).join('')}
+                    </ul>
+                    ` : ''}
+                </div>`;
+            }
+            
+            // Show metadata
+            if (result.analysis_metadata) {
+                html += `<div class="result-card" style="font-size: 12px; color: #666;">
+                    <p><strong>Analyzed with:</strong> ${result.analysis_metadata.model_used}</p>
+                    <p><strong>Timestamp:</strong> ${new Date(result.analysis_metadata.analysis_timestamp).toLocaleString()}</p>
+                </div>`;
+            }
+            
+            // Show checklist compliance if available
+            if (result.checklist_results) {
+                const checklist = result.checklist_results;
+                html += `<div class="result-card">
+                    <h3>📋 Detailed Checklist Results</h3>
+                    <div class="criteria-grid">`;
+                
+                // Section 1
+                if (checklist.section1_product_digital_element !== undefined) {
+                    const status = checklist.section1_product_digital_element === 'YES' ? '✅' : '❌';
+                    html += `
+                        <div class="criteria-item">
+                            <strong>${status} Section 1: Product with Digital Elements</strong>
+                            <p style="font-size: 14px; margin-top: 8px;">${checklist.section1_product_digital_element}</p>
+                        </div>`;
+                }
+                
+                // Section 2
+                if (checklist.section2_connectivity !== undefined) {
+                    const status = checklist.section2_connectivity === 'YES' ? '✅' : '❌';
+                    html += `
+                        <div class="criteria-item">
+                            <strong>${status} Section 2: Connectivity</strong>
+                            <p style="font-size: 14px; margin-top: 8px;">${checklist.section2_connectivity}</p>
+                        </div>`;
+                }
+                
+                // Section 3
+                if (checklist.section3_eu_market_3_1 !== undefined || checklist.section3_eu_market_3_2 !== undefined) {
+                    html += `
+                        <div class="criteria-item">
+                            <strong>Section 3: EU Market Placement</strong>
+                            <p style="font-size: 14px; margin-top: 8px;">3.1: ${checklist.section3_eu_market_3_1 || 'N/A'}</p>
+                            <p style="font-size: 14px;">3.2: ${checklist.section3_eu_market_3_2 || 'N/A'}</p>
+                        </div>`;
+                }
+                
+                // Section 4 Exclusions
+                if (checklist.section4_exclusions) {
+                    const exclusions = checklist.section4_exclusions;
+                    html += `
+                        <div class="criteria-item">
+                            <strong>Section 4: Exclusions</strong>
+                            <p style="font-size: 14px; margin-top: 8px;">Medical Device (4.1): ${exclusions.medical_device_4_1 || 'N/A'}</p>
+                            <p style="font-size: 14px;">IVDR (4.2): ${exclusions.ivdr_4_2 || 'N/A'}</p>
+                            <p style="font-size: 14px;">Vehicle Approval (4.3): ${exclusions.vehicle_approval_4_3 || 'N/A'}</p>
+                            <p style="font-size: 14px;">Aviation (4.4): ${exclusions.aviation_4_4 || 'N/A'}</p>
+                            <p style="font-size: 14px;">Maritime (4.5): ${exclusions.maritime_4_5 || 'N/A'}</p>
+                            <p style="font-size: 14px;">National Security (4.6): ${exclusions.national_security_4_6 || 'N/A'}</p>
+                            <p style="font-size: 14px;">Higher Protection (4.7): ${exclusions.higher_protection_4_7 || 'N/A'}</p>
+                        </div>`;
+                }
+                
+                // Sections 5-8
+                if (checklist.section5_spare_part !== undefined) {
+                    const status = checklist.section5_spare_part === 'YES' ? '✅' : '❌';
+                    html += `
+                        <div class="criteria-item">
+                            <strong>${status} Section 5: Spare Part</strong>
+                            <p style="font-size: 14px; margin-top: 8px;">${checklist.section5_spare_part}</p>
+                        </div>`;
+                }
+                
+                if (checklist.section6_remote_processing !== undefined) {
+                    const status = checklist.section6_remote_processing === 'YES' ? '✅' : '❌';
+                    html += `
+                        <div class="criteria-item">
+                            <strong>${status} Section 6: Remote Data Processing</strong>
+                            <p style="font-size: 14px; margin-top: 8px;">${checklist.section6_remote_processing}</p>
+                        </div>`;
+                }
+                
+                if (checklist.section7_oss !== undefined) {
+                    const status = checklist.section7_oss === 'YES' ? '✅' : '❌';
+                    html += `
+                        <div class="criteria-item">
+                            <strong>${status} Section 7: Open-Source Software</strong>
+                            <p style="font-size: 14px; margin-top: 8px;">${checklist.section7_oss}</p>
+                        </div>`;
+                }
+                
+                if (checklist.section8_downstream !== undefined) {
+                    const status = checklist.section8_downstream === 'YES' ? '✅' : '❌';
+                    html += `
+                        <div class="criteria-item">
+                            <strong>${status} Section 8: Downstream Products</strong>
+                            <p style="font-size: 14px; margin-top: 8px;">${checklist.section8_downstream}</p>
+                        </div>`;
+                }
+                
+                html += `</div></div>`;
+            }
+            
+            // Show checklist compliance summary if available
+            if (result.checklist_compliance) {
+                const compliance = result.checklist_compliance;
+                html += `<div class="result-card">
+                    <h3>📊 Checklist Compliance Summary</h3>
+                    <p><strong>Total Items:</strong> ${compliance.total_items || 0}</p>
+                    <p><strong>Compliant:</strong> ${compliance.compliant_items || 0}</p>
+                    <p><strong>Non-Compliant:</strong> ${compliance.non_compliant_items || 0}</p>
+                    ${compliance.details && compliance.details.length > 0 ? `
+                    <h4 style="margin-top: 15px;">Details:</h4>
+                    <ul>
+                        ${compliance.details.map(detail => `<li>${detail}</li>`).join('')}
+                    </ul>
+                    ` : ''}
+                </div>`;
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        function displayError(error) {
+            const container = document.getElementById('results-content');
+            container.innerHTML = `
+                <div class="result-card" style="background: #fee2e2;">
+                    <h3 style="color: #991b1b;">❌ Analysis Error</h3>
+                    <p>${error}</p>
+                    <p style="margin-top: 10px;">Please check:</p>
+                    <ul>
+                        <li>Your Gemini API key is valid</li>
+                        <li>The document is readable (not corrupted)</li>
+                        <li>File size is under 10MB</li>
+                    </ul>
+                </div>
+            `;
+        }
+        
+        // Drag and drop functionality
+        const dropZone = document.querySelector('.file-upload-area');
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '#667eea';
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.style.borderColor = '#ccc';
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '#ccc';
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                selectedFile = files[0];
+                document.getElementById('file-name').innerHTML = `✅ Selected: ${selectedFile.name}`;
+            }
+        });
+    </script>
+</body>
+</html>
