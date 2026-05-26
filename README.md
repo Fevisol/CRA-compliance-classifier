@@ -55,3 +55,14 @@ Get a free Gemini API key at: https://aistudio.google.com/apikey
 python app.py
 The app will start a local web server.
 Open your browser at the adress that is displayed.
+
+How It Works
+When you upload a product document, the app follows this pipeline:
+1.Text Extraction — PyPDF2 extracts raw text from the uploaded PDF
+2.Reference Loading — CRA regulation PDFs from the References/ folder are auto-loaded as AI context
+3.Prompt Construction — Document text + regulation text + 22 checklist questions are combined into one prompt
+4.Gemini Analysis — The prompt is sent to Gemini 2.5 Flash which reasons through each CRA gate
+5.Result Rendering — Structured JSON response is parsed and displayed in the web interface
+
+Academic Context
+This project was developed as part of a Master's thesis in Telecommunication Engineering at the University of Cassino and Southern Lazio (UNICAS), focusing on the Cyber Resilience Act compliance framework for V2X and ADAS ecosystems.
